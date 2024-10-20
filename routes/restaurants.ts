@@ -4,6 +4,9 @@ import { RestaurantSchema, type Restaurant } from "../schemas/restaurant.js";
 import { initializeRedisClient } from "../utils/client.js";
 import { nanoid } from "nanoid";
 import {
+  cuisineKey,
+  cuisinesKey,
+  restaurantCuisinesKeyById,
   restaurantKeyById,
   reviewDetailsKeyById,
   reviewKeyById,
@@ -11,7 +14,6 @@ import {
 import { errorResponse, successResponse } from "../utils/responses.js";
 import { checkRestaurantExists } from "../middlewares/checkRestaurantExists.js";
 import { ReviewSchema, type Review } from "../schemas/review.js";
-import { timeStamp } from "console";
 
 const router = express.Router();
 
@@ -22,8 +24,16 @@ router.post("/", validate(RestaurantSchema), async (req, res, next) => {
     const id = nanoid();
     const restaurantKey = restaurantKeyById(id);
     const hashData = { id, name: data.name, location: data.location };
-    const addResult = await client.hSet(restaurantKey, hashData);
-    console.log({ addResult });
+    await Promise.all([
+      ...data.cuisines.map((cuisine) =>
+        Promise.all([
+          client.sAdd(cuisinesKey, cuisine),
+          client.sAdd(cuisineKey(cuisine), id),
+          client.sAdd(restaurantCuisinesKeyById(id), cuisine),
+        ])
+      ),
+      client.hSet(restaurantKey, hashData),
+    ]);
     return successResponse(res, hashData, "Restaurant added successfully");
   } catch (error) {
     next(error);
@@ -123,13 +133,14 @@ router.get(
     try {
       const client = await initializeRedisClient();
       const restaurantKey = restaurantKeyById(restaurantId);
-      const [viewCount, restaurant] = await Promise.all([
+      const [viewCount, restaurant, cuisines] = await Promise.all([
         client.hIncrBy(restaurantKey, "viewCount", 1),
         client.hGetAll(restaurantKey),
+        client.sMembers(restaurantCuisinesKeyById(restaurantId)),
       ]);
       return successResponse(
         res,
-        restaurant,
+        { ...restaurant, cuisines },
         "Restaurant fetched successfully"
       );
     } catch (error) {
